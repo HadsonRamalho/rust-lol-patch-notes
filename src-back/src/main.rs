@@ -1,16 +1,21 @@
-use chrono::{NaiveDate, Utc};
 use reqwest::Client;
 use scraper::{Html, Selector};
 use serde::Deserialize;
 use tokio;
 
-#[derive(Debug)]
+use crate::utils::{clean_champion_name, clean_text, find_closest_patch, read_character_name};
+
+mod utils;
+
+const BASE_URL: &'static str = "https://www.leagueoflegends.com";
+
+#[derive(Debug, Default)]
 struct AbilityChange {
     name: String,
     changes: Vec<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct PatchCard {
     champion_name: String,
     champion_image: String,
@@ -25,80 +30,17 @@ struct PatchNote {
     release_date: String,
 }
 
-fn clean_text(text: &str) -> String {
-    let replaced = text.replace('\n', " ").replace('\t', " ");
-    let mut result = String::new();
-    let mut last_was_space = false;
-    for c in replaced.chars() {
-        if c.is_whitespace() {
-            if !last_was_space {
-                result.push(' ');
-                last_was_space = true;
-            }
-        } else {
-            result.push(c);
-            last_was_space = false;
-        }
-    }
-    result.trim().to_string()
+struct SelectedPage {
+    document: Html,
+    selector: Selector,
 }
 
-fn find_closest_patch(patches: &[PatchNote]) -> Option<&PatchNote> {
-    let today = Utc::now().naive_utc().date();
+async fn select_page(
+    client: &Client,
+    version: &str,
+) -> Result<SelectedPage, Box<dyn std::error::Error>> {
+    let url = format!("{}/pt-br/news/tags/patch-notes/", BASE_URL);
 
-    patches
-        .iter()
-        .filter_map(|patch| {
-            NaiveDate::parse_from_str(&patch.release_date, "%Y-%m-%d")
-                .ok()
-                .filter(|&d| d <= today)
-                .map(|date| (patch, date))
-        })
-        .min_by_key(|(_, date)| (today - *date).num_days())
-        .map(|(patch, _)| patch)
-}
-
-fn clean_champion_name(name: &str) -> String {
-    let mut result = String::new();
-    let mut lowercase_next = false;
-
-    for c in name.chars() {
-        if c.is_alphanumeric() {
-            if lowercase_next {
-                result.push(c.to_ascii_lowercase());
-                lowercase_next = false;
-            } else {
-                result.push(c);
-            }
-        } else {
-            lowercase_next = true;
-        }
-    }
-
-    result
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let json_data = std::fs::read_to_string("patch_notes.json")?;
-
-    let patches: Vec<PatchNote> = serde_json::from_str(&json_data).unwrap();
-
-    let version = if let Some(closest) = find_closest_patch(&patches) {
-        println!(
-            "Closest version: {} - Date: {}",
-            closest.version, closest.release_date
-        );
-        closest.version.to_string()
-    } else {
-        eprintln!("No version found.");
-        return Ok(());
-    };
-
-    let base_url = "https://www.leagueoflegends.com";
-    let url = format!("{}/pt-br/news/tags/patch-notes/", base_url);
-
-    let client = Client::new();
     let response = client.get(&url).send().await?.text().await?;
 
     let document = Html::parse_document(&response);
@@ -108,9 +50,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ))
     .unwrap();
 
-    if let Some(element) = document.select(&selector).next() {
+    Ok(SelectedPage { document, selector })
+}
+
+async fn get_champion_info(
+    client: &Client,
+    page: &SelectedPage,
+    desired_character: &str,
+) -> Result<PatchCard, Box<dyn std::error::Error>> {
+    if let Some(element) = page.document.select(&page.selector).next() {
         if let Some(href) = element.value().attr("href") {
-            let full_url = format!("{}{}", base_url, href);
+            let full_url = format!("{}{}", BASE_URL, href);
 
             let patch_page = client.get(&full_url).send().await?.text().await?;
 
@@ -179,6 +129,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     clean_champion_name(&champion_name)
                 );
 
+                let is_desired_character = if (&desired_character.eq(&champion_name)).to_owned() {
+                    true
+                } else {
+                    false
+                };
+
                 let patch_card = PatchCard {
                     champion_image,
                     champion_name,
@@ -187,12 +143,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     abilities,
                 };
 
-                println!("{:#?}", patch_card);
+                if is_desired_character {
+                    return Ok(patch_card);
+                }
             }
         }
+        return Ok(PatchCard::default());
     } else {
-        println!("Link to 'Update Notes {}' not found.", version);
+        //println!("Link to 'Update Notes {}' not found.", version);
+        Ok(PatchCard::default())
     }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = Client::new();
+
+    let json_data = std::fs::read_to_string("patch_notes.json")?;
+
+    let patches: Vec<PatchNote> = serde_json::from_str(&json_data).unwrap();
+
+    let versions: Vec<String> = patches.iter().map(|p| p.version.clone()).collect();
+
+    let _version = if let Some(closest) = find_closest_patch(&patches) {
+        println!(
+            "Closest version: {} - Date: {}",
+            closest.version, closest.release_date
+        );
+        closest.version.to_string()
+    } else {
+        eprintln!("No version found.");
+        return Ok(());
+    };
+
+    let desired_character = read_character_name().trim().to_owned();
+
+    let mut infos = vec![];
+    for version in versions.iter() {
+        let page = select_page(&client, &version).await?;
+
+        let info = get_champion_info(&client, &page, &desired_character).await?;
+
+        if !info.champion_name.is_empty() {
+            infos.push(info);
+        }
+    }
+
+    infos.iter().for_each(|i| println!("\n\n{:?}", i));
+    println!(
+        "\n\n\nUpdated {} times in the last {} patches",
+        infos.len(),
+        versions.len()
+    );
 
     Ok(())
 }

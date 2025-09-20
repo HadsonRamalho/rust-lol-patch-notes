@@ -1,11 +1,14 @@
 [
-  { "version": "25.24", "release_date": "2025-12-10" },
-  { "version": "25.23", "release_date": "2025-11-19" },
-  { "version": "25.22", "release_date": "2025-11-05" },
-  { "version": "25.21", "release_date": "2025-10-22" },
-  { "version": "25.20", "release_date": "2025-10-08" },
-  { "version": "25.19", "release_date": "2025-09-24" },
   { "version": "25.18", "release_date": "2025-09-10" },
   { "version": "25.17", "release_date": "2025-08-27" },
-  { "version": "25.16", "release_date": "2025-08-13" }
+  { "version": "25.16", "release_date": "2025-08-13" },
+  { "version": "25.15", "release_date": "2025-07-29" },
+  { "version": "25.14", "release_date": "2025-07-15" },
+  { "version": "25.13", "release_date": "2025-06-24" },
+  { "version": "25.12", "release_date": "2025-06-10" },
+  { "version": "25.11", "release_date": "2025-05-27" },
+  { "version": "25.10", "release_date": "2025-05-13" },
+  { "version": "25.09", "release_date": "2025-04-29" },
+  { "version": "25.08", "release_date": "2025-04-15" },
+  { "version": "25.07", "release_date": "2025-04-01" }
 ]
