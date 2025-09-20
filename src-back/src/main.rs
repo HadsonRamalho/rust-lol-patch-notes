@@ -13,6 +13,7 @@ struct AbilityChange {
 #[derive(Debug)]
 struct PatchCard {
     champion_name: String,
+    champion_image: String,
     summary: String,
     context: String,
     abilities: Vec<AbilityChange>,
@@ -55,6 +56,26 @@ fn find_closest_patch(patches: &[PatchNote]) -> Option<&PatchNote> {
         })
         .min_by_key(|(_, date)| (today - *date).num_days())
         .map(|(patch, _)| patch)
+}
+
+fn clean_champion_name(name: &str) -> String {
+    let mut result = String::new();
+    let mut lowercase_next = false;
+
+    for c in name.chars() {
+        if c.is_alphanumeric() {
+            if lowercase_next {
+                result.push(c.to_ascii_lowercase());
+                lowercase_next = false;
+            } else {
+                result.push(c);
+            }
+        } else {
+            lowercase_next = true;
+        }
+    }
+
+    result
 }
 
 #[tokio::main]
@@ -153,7 +174,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
 
+                let champion_image = format!(
+                    "https://am-a.akamaihd.net/image?f=https://ddragon.leagueoflegends.com/cdn/15.17.1/img/champion/{}.png",
+                    clean_champion_name(&champion_name)
+                );
+
                 let patch_card = PatchCard {
+                    champion_image,
                     champion_name,
                     summary,
                     context,
