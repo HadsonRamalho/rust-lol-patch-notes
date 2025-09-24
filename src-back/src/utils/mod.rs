@@ -2,6 +2,47 @@ use chrono::{NaiveDate, Utc};
 
 use crate::PatchNote;
 
+#[derive(Debug)]
+pub struct LanguageInfo {
+    pub lang: String,
+    pub base_stats: String,
+    pub patch_notes: String,
+}
+
+pub fn select_language() -> LanguageInfo {
+    use std::io::stdin;
+    let mut option = String::new();
+    stdin()
+        .read_line(&mut option)
+        .expect("Error while reading language option");
+    identify_language(&option)
+}
+
+pub fn identify_language(option: &str) -> LanguageInfo {
+    match option.trim() {
+        "pt-br" => LanguageInfo {
+            patch_notes: "Notas da Atualização".to_string(),
+            lang: option.trim().to_string(),
+            base_stats: "Atributos base".to_string(),
+        },
+        "en-us" => LanguageInfo {
+            patch_notes: "Patch Notes".to_string(),
+            lang: option.trim().to_string(),
+            base_stats: "Base Stats".to_string(),
+        },
+        "de-de" => LanguageInfo {
+            lang: option.trim().to_string(),
+            base_stats: "Grundwerte".to_string(),
+            patch_notes: "Patchnotizen".to_string(),
+        },
+        _ => LanguageInfo {
+            patch_notes: "Notas da Atualização".to_string(),
+            lang: option.trim().to_string(),
+            base_stats: "Atributos base".to_string(),
+        },
+    }
+}
+
 pub fn clean_text(text: &str) -> String {
     let replaced = text.replace('\n', " ").replace('\t', " ");
     let mut result = String::new();

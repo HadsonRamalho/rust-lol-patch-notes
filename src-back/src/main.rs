@@ -1,9 +1,12 @@
 use reqwest::Client;
-use scraper::{Html, Selector};
+use scraper::{ElementRef, Html, Selector};
 use serde::Deserialize;
 use tokio;
 
-use crate::utils::{clean_champion_name, clean_text, find_closest_patch, read_character_name};
+use crate::utils::{
+    LanguageInfo, clean_champion_name, clean_text, find_closest_patch, identify_language,
+    read_character_name, select_language,
+};
 
 mod utils;
 
@@ -38,15 +41,27 @@ struct SelectedPage {
 async fn select_page(
     client: &Client,
     version: &str,
+    selected_language: &mut LanguageInfo,
 ) -> Result<SelectedPage, Box<dyn std::error::Error>> {
-    let url = format!("{}/pt-br/news/tags/patch-notes/", BASE_URL);
+    let url = format!(
+        "{}/{}/news/tags/patch-notes/",
+        BASE_URL, &selected_language.lang
+    );
 
     let response = client.get(&url).send().await?.text().await?;
 
     let document = Html::parse_document(&response);
+    if vec!["de-de", "pt-br"].contains(&selected_language.lang.as_str()) {
+        selected_language.patch_notes = format!(
+            "{} {}",
+            identify_language(&selected_language.lang).patch_notes,
+            &version
+        );
+    }
+
     let selector = Selector::parse(&format!(
-        r#"a[aria-label*="Notas da Atualização {}"]"#,
-        version
+        r#"a[aria-label*="{}"]"#,
+        selected_language.patch_notes
     ))
     .unwrap();
 
@@ -57,102 +72,104 @@ async fn get_champion_info(
     client: &Client,
     page: &SelectedPage,
     desired_character: &str,
+    selected_language: &LanguageInfo,
 ) -> Result<PatchCard, Box<dyn std::error::Error>> {
+    let mut collected_abilities = vec![];
+    let mut summaries = vec![];
+    let mut contexts = vec![];
+    let mut image_url = String::new();
+    let mut champion_name = String::new();
+
     if let Some(element) = page.document.select(&page.selector).next() {
         if let Some(href) = element.value().attr("href") {
             let full_url = format!("{}{}", BASE_URL, href);
-
             let patch_page = client.get(&full_url).send().await?.text().await?;
-
             let document = Html::parse_document(&patch_page);
 
             let card_selector = Selector::parse("div.patch-change-block").unwrap();
             let champion_name_selector = Selector::parse("h3.change-title a").unwrap();
             let summary_selector = Selector::parse("p.summary").unwrap();
             let context_selector = Selector::parse("blockquote.blockquote.context").unwrap();
-            let ability_title_selector =
-                Selector::parse("h4.change-detail-title.ability-title").unwrap();
-            let change_list_selector = Selector::parse("ul").unwrap();
 
             for card in document.select(&card_selector) {
-                let champion_name = card
+                let this_champion = card
                     .select(&champion_name_selector)
                     .next()
                     .map(|e| e.text().collect::<String>())
                     .unwrap_or_default();
 
-                if champion_name.is_empty() {
+                if clean_champion_name(&this_champion) != clean_champion_name(desired_character) {
                     continue;
                 }
 
-                let summary = card
-                    .select(&summary_selector)
-                    .next()
-                    .map(|e| e.text().collect::<String>())
-                    .unwrap_or_default();
+                champion_name = this_champion;
 
-                let context = card
-                    .select(&context_selector)
-                    .next()
-                    .map(|e| clean_text(&e.text().collect::<String>()))
-                    .unwrap_or_default();
+                if let Some(summary_elem) = card.select(&summary_selector).next() {
+                    let summary = summary_elem.text().collect::<String>();
+                    if !summary.is_empty() {
+                        summaries.push(summary);
+                    }
+                }
 
-                let mut abilities = Vec::new();
+                if let Some(context_elem) = card.select(&context_selector).next() {
+                    let context = clean_text(&context_elem.text().collect::<String>());
+                    if !context.is_empty() {
+                        contexts.push(context);
+                    }
+                }
 
-                let mut ability_iter = card.select(&ability_title_selector).peekable();
-                let mut ul_iter = card.select(&change_list_selector);
+                let h4_or_ul_selector = Selector::parse("h4.change-detail-title, ul").unwrap();
+                let li_selector = Selector::parse("li").unwrap();
+                let mut current_ability = selected_language.base_stats.to_string();
+                let mut temp_changes = vec![];
 
-                while let Some(ability_title) = ability_iter.next() {
-                    let ability_name = ability_title.text().collect::<String>();
+                for element in card.select(&h4_or_ul_selector) {
+                    if element.value().name() == "h4" {
+                        if !temp_changes.is_empty() {
+                            collected_abilities.push(AbilityChange {
+                                name: current_ability.clone(),
+                                changes: temp_changes.clone(),
+                            });
+                            temp_changes.clear();
+                        }
+                        current_ability = element.text().collect::<String>().trim().to_string();
+                    } else if element.value().name() == "ul" {
+                        let changes = element
+                            .select(&li_selector)
+                            .map(|li| li.text().collect::<String>().trim().to_string())
+                            .collect::<Vec<_>>();
+                        temp_changes.extend(changes);
+                    }
+                }
 
-                    let changes = if let Some(changes_ul) = ul_iter.next() {
-                        changes_ul
-                            .select(&Selector::parse("li").unwrap())
-                            .map(|li| li.text().collect::<String>())
-                            .collect::<Vec<_>>()
-                    } else {
-                        Vec::new()
-                    };
-
-                    abilities.push(AbilityChange {
-                        name: ability_name,
-                        changes,
+                if !temp_changes.is_empty() {
+                    collected_abilities.push(AbilityChange {
+                        name: current_ability.clone(),
+                        changes: temp_changes.clone(),
                     });
                 }
 
-                if abilities.is_empty() {
-                    continue;
-                }
-
-                let champion_image = format!(
-                    "https://am-a.akamaihd.net/image?f=https://ddragon.leagueoflegends.com/cdn/15.17.1/img/champion/{}.png",
-                    clean_champion_name(&champion_name)
-                );
-
-                let is_desired_character = if (&desired_character.eq(&champion_name)).to_owned() {
-                    true
-                } else {
-                    false
-                };
-
-                let patch_card = PatchCard {
-                    champion_image,
-                    champion_name,
-                    summary,
-                    context,
-                    abilities,
-                };
-
-                if is_desired_character {
-                    return Ok(patch_card);
+                if image_url.is_empty() {
+                    image_url = format!(
+                        "https://am-a.akamaihd.net/image?f=https://ddragon.leagueoflegends.com/cdn/15.17.1/img/champion/{}.png",
+                        clean_champion_name(&champion_name)
+                    );
                 }
             }
         }
-        return Ok(PatchCard::default());
-    } else {
-        //println!("Link to 'Update Notes {}' not found.", version);
-        Ok(PatchCard::default())
     }
+
+    if champion_name.is_empty() {
+        return Ok(PatchCard::default());
+    }
+
+    Ok(PatchCard {
+        champion_name,
+        champion_image: image_url,
+        summary: summaries.join(" / "),
+        context: contexts.join(" / "),
+        abilities: collected_abilities,
+    })
 }
 
 #[tokio::main]
@@ -178,18 +195,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let desired_character = read_character_name().trim().to_owned();
 
+    println!("Language: (pt-br, en-us or de-de)");
+    let mut selected_language = select_language();
+
+    println!("Selected: {:?}", selected_language);
+
     let mut infos = vec![];
     for version in versions.iter() {
-        let page = select_page(&client, &version).await?;
+        if selected_language.lang.eq("en-us") {
+            selected_language.patch_notes = format!("Patch {} Notes", &version);
+        }
 
-        let info = get_champion_info(&client, &page, &desired_character).await?;
+        let page = select_page(&client, &version, &mut selected_language).await?;
+
+        let info =
+            get_champion_info(&client, &page, &desired_character, &selected_language).await?;
 
         if !info.champion_name.is_empty() {
             infos.push(info);
         }
     }
 
-    infos.iter().for_each(|i| println!("\n\n{:?}", i));
+    infos.iter().for_each(|i| println!("\n\n{:#?}", i));
     println!(
         "\n\n\nUpdated {} times in the last {} patches",
         infos.len(),
