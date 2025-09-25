@@ -2,6 +2,8 @@ use reqwest::Client;
 use scraper::{ElementRef, Html, Selector};
 use serde::Deserialize;
 use tokio;
+use tracing::{error, info};
+use tracing_subscriber::EnvFilter;
 
 use crate::utils::{
     LanguageInfo, clean_champion_name, clean_text, find_closest_patch, identify_language,
@@ -25,6 +27,7 @@ struct PatchCard {
     summary: String,
     context: String,
     abilities: Vec<AbilityChange>,
+    patch_version: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -169,11 +172,16 @@ async fn get_champion_info(
         summary: summaries.join(" / "),
         context: contexts.join(" / "),
         abilities: collected_abilities,
+        patch_version: selected_language.patch_notes.clone(),
     })
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
+
     let client = Client::new();
 
     let json_data = std::fs::read_to_string("patch_notes.json")?;
@@ -183,22 +191,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let versions: Vec<String> = patches.iter().map(|p| p.version.clone()).collect();
 
     let _version = if let Some(closest) = find_closest_patch(&patches) {
-        println!(
+        info!(
             "Closest version: {} - Date: {}",
             closest.version, closest.release_date
         );
         closest.version.to_string()
     } else {
-        eprintln!("No version found.");
+        error!("No version found.");
         return Ok(());
     };
 
     let desired_character = read_character_name().trim().to_owned();
 
-    println!("Language: (pt-br, en-us or de-de)");
+    info!("Language: (pt-br, en-us or de-de)");
     let mut selected_language = select_language();
 
-    println!("Selected: {:?}", selected_language);
+    info!("Selected: {:?}", selected_language);
 
     let mut infos = vec![];
     for version in versions.iter() {
@@ -216,8 +224,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    infos.iter().for_each(|i| println!("\n\n{:#?}", i));
-    println!(
+    infos.iter().for_each(|i| info!("\n\n{:#?}", i));
+    info!(
         "\n\n\nUpdated {} times in the last {} patches",
         infos.len(),
         versions.len()

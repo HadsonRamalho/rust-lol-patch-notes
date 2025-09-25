@@ -12,3 +12,5 @@ scraper = "*"
 chrono = "0.4.42"
 serde = "1.0.225"
 serde_json = "1.0.145"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }

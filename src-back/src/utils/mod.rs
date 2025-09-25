@@ -1,6 +1,6 @@
-use chrono::{NaiveDate, Utc};
-
 use crate::PatchNote;
+use chrono::{NaiveDate, Utc};
+use tracing::error;
 
 #[derive(Debug)]
 pub struct LanguageInfo {
@@ -14,7 +14,7 @@ pub fn select_language() -> LanguageInfo {
     let mut option = String::new();
     stdin()
         .read_line(&mut option)
-        .expect("Error while reading language option");
+        .map_err(|e| error!("Error reading language option"));
     identify_language(&option)
 }
 
@@ -101,6 +101,6 @@ pub fn read_character_name() -> String {
     let mut name = String::new();
     stdin()
         .read_line(&mut name)
-        .expect("Error while reading character name");
+        .map_err(|e| error!("Error reading character name"));
     name
 }
