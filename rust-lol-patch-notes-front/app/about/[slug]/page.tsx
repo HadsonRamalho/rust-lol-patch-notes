@@ -1,6 +1,6 @@
 "use client";
 
-import { Character } from "@/interfaces/character";
+// import { Character } from "@/interfaces/character";
 import personagens from "@/consts/personagens";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";

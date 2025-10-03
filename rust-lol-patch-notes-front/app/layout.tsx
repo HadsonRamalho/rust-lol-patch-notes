@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { Navbar01 } from "@/components/ui/shadcn-io/navbar-01";
+import { Input } from "@/components/ui/input";
+(""); // instalou?
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -26,8 +29,9 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        <Navbar01></Navbar01>
         {children}
-      </body> 
+      </body>
     </html>
   );
 }
