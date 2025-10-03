@@ -45,7 +45,7 @@ export default function Home() {
       </div>*/}
 
       <h1 className=" p-5 flex items-center justify-center text-2xl">
-        Atualizações de bonecos do LOL
+        League of Legends Champions Patch Notes
       </h1>
       <div className="justify-items-start flex flex-wrap">
         {personagens.map((personagem) => (
@@ -53,27 +53,17 @@ export default function Home() {
             key={personagem.name}
             className={`p-6 m-4 border-1  border-emerald-600 ${isVisible ? "block" : "hidden"}`}
           >
-            <CardHeader className="p-5 w-full justify-center text-center ">
+            <div className="relative w-[100px] h-[100px] mx-auto">
               <Image
-                width={100}
-                height={100}
-                className="rounded-full "
+                fill
                 src={`/${personagem.name}.png`}
-                alt="o"
+                alt={personagem.name}
+                className="object-cover rounded-md border-2 border-black/65"
               />
-              <CardTitle>{personagem.name}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <Button
-                type="button"
-                className="bg-red-400 min-w-24 min-h-1/3 "
-                onClick={() => {
-                  router.push(`about/${personagem.name}`);
-                }}
-              >
-                Ver Atualizações de {personagem.name}
-              </Button>
-            </CardContent>
+              <div className="absolute bottom-0 w-full bg-black/40 rounded-b-md text-white text-xs text-center py-1">
+                {personagem.name}
+              </div>
+            </div>
           </Card>
         ))}
       </div>
