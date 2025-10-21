@@ -1,8 +1,5 @@
-use chrono::{NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
-use tracing::{error, info};
-
-use crate::champions::PatchNote;
+use tracing::info;
 
 #[derive(Debug, Clone)]
 pub struct LanguageInfo {
@@ -54,23 +51,8 @@ pub fn clean_text(text: &str) -> String {
     result.trim().to_string()
 }
 
-pub fn find_closest_patch(patches: &[PatchNote]) -> Option<&PatchNote> {
-    let today = Utc::now().naive_utc().date();
-
-    patches
-        .iter()
-        .filter_map(|patch| {
-            NaiveDate::parse_from_str(&patch.release_date, "%Y-%m-%d")
-                .ok()
-                .filter(|&d| d <= today)
-                .map(|date| (patch, date))
-        })
-        .min_by_key(|(_, date)| (today - *date).num_days())
-        .map(|(patch, _)| patch)
-}
-
 #[derive(Serialize, Deserialize, Debug, Default)]
-pub struct ChampionNames {
+pub struct ChampionImages {
     pub upper: String,
     pub lower: String,
 }
@@ -109,10 +91,10 @@ fn iter_champion_name(name: &str, to_upper: bool) -> String {
     result
 }
 
-pub fn clean_champion_name(name: &str) -> ChampionNames {
+pub fn clean_champion_name(name: &str) -> ChampionImages {
     info!("Champion: {}", name);
 
-    ChampionNames {
+    ChampionImages {
         upper: iter_champion_name(&name, true),
         lower: iter_champion_name(&name, false),
     }

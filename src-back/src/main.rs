@@ -1,4 +1,5 @@
 use tokio::{self, net::TcpListener};
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 use crate::router::get_router;
@@ -15,6 +16,7 @@ async fn main() {
         .init();
 
     let router = get_router().await;
+    info!("Starting server");
     let listener = TcpListener::bind("0.0.0.0:3111").await.unwrap();
     axum::serve(listener, router).await.unwrap();
 }

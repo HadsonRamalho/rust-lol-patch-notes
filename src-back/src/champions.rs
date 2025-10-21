@@ -1,5 +1,5 @@
 use crate::utils::{
-    ChampionNames, LanguageInfo, clean_champion_name, clean_text, identify_language,
+    ChampionImages, LanguageInfo, clean_champion_name, clean_text, identify_language,
 };
 use reqwest::{Client, StatusCode};
 use scraper::{Html, Selector};
@@ -13,7 +13,7 @@ pub struct Champion {
     pub second_image_url: String,
 }
 
-const BASE_URL: &'static str = "https://www.leagueoflegends.com";
+const CHAMPIONS_URL: &str = "https://www.leagueoflegends.com/en-us/champions/";
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct AbilityChange {
@@ -24,7 +24,7 @@ pub struct AbilityChange {
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct PatchCard {
     pub champion_name: String,
-    pub champion_image: ChampionNames,
+    pub champion_image: ChampionImages,
     pub summary: String,
     pub context: String,
     pub abilities: Vec<AbilityChange>,
@@ -37,11 +37,11 @@ pub struct PatchNote {
     pub release_date: String,
 }
 
+// REVISED
 pub async fn get_all_champions(
     client: &Client,
 ) -> Result<Vec<Champion>, Box<dyn std::error::Error>> {
-    let url = "https://www.leagueoflegends.com/en-us/champions/";
-    let response = client.get(url).send().await?.text().await?;
+    let response = client.get(CHAMPIONS_URL).send().await?.text().await?;
     let document = Html::parse_document(&response);
 
     let card_selector = Selector::parse(r#"a[role="button"][aria-label]"#).unwrap();
@@ -50,7 +50,7 @@ pub async fn get_all_champions(
 
     for element in document.select(&card_selector) {
         if let Some(champion_name) = element.value().attr("aria-label") {
-            let image_url = generate_champion_image_url(champion_name);
+            let image_url = generate_champion_profile_url(champion_name);
 
             champions.push(Champion {
                 name: champion_name.to_string(),
@@ -63,13 +63,40 @@ pub async fn get_all_champions(
     Ok(champions)
 }
 
-fn clean_champion_name_for_image(name: &str) -> String {
-    name.chars()
-        .filter(|c| c.is_alphanumeric())
-        .collect::<String>()
+pub async fn get_single_champion(
+    client: &Client,
+    desired_character: &str,
+) -> Result<Champion, StatusCode> {
+    let response = client
+        .get(CHAMPIONS_URL)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let document = Html::parse_document(&response);
+
+    let card_selector = Selector::parse(r#"a[role="button"][aria-label]"#).unwrap();
+
+    for element in document.select(&card_selector) {
+        if let Some(champion_name) = element.value().attr("aria-label") {
+            if champion_name == desired_character {
+                let image_url = generate_champion_image_url(champion_name);
+
+                return Ok(Champion {
+                    name: champion_name.to_string(),
+                    first_image_url: image_url.lower,
+                    second_image_url: image_url.upper,
+                });
+            }
+        }
+    }
+
+    Err(StatusCode::NOT_FOUND)
 }
 
-pub fn generate_champion_image_url(champion_name: &str) -> ChampionNames {
+pub fn generate_champion_profile_url(champion_name: &str) -> ChampionImages {
     let mut clean_name = clean_champion_name(champion_name);
     clean_name.lower = format!(
         "https://am-a.akamaihd.net/image?f=https://ddragon.leagueoflegends.com/cdn/15.18.1/img/champion/{}.png",
@@ -82,19 +109,43 @@ pub fn generate_champion_image_url(champion_name: &str) -> ChampionNames {
     clean_name
 }
 
+pub fn generate_champion_image_url(champion_name: &str) -> ChampionImages {
+    let mut clean_name = clean_champion_name(champion_name);
+    clean_name.lower = format!(
+        "https://ddragon.leagueoflegends.com/cdn/img/champion/splash/{}_0.jpg",
+        clean_name.lower
+    );
+    clean_name.upper = format!(
+        "https://ddragon.leagueoflegends.com/cdn/img/champion/splash/{}_0.jpg",
+        clean_name.upper
+    );
+    clean_name
+}
+
 pub async fn get_champion_notes_for_patch(
     client: &Client,
     desired_character: &str,
     selected_language: &mut LanguageInfo,
     version: &str,
 ) -> Result<PatchCard, StatusCode> {
-    let url = format!(
-        "{}/{}/news/tags/patch-notes/",
-        BASE_URL, &selected_language.lang
-    );
+    if vec!["de-de", "pt-br"].contains(&selected_language.lang.as_str()) {
+        selected_language.patch_notes = format!(
+            "{} {}",
+            identify_language(&selected_language.lang).patch_notes,
+            version
+        );
+    }
 
-    let response = client
-        .get(&url)
+    let links = vec![format!(
+        "https://www.leagueoflegends.com/{}/news/game-updates/patch-{}-notes/",
+        selected_language.lang,
+        version.replace(".", "-")
+    )];
+
+    info!("Links: {}", links.len());
+
+    let patch_html = client
+        .get(&links[0])
         .send()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -102,139 +153,84 @@ pub async fn get_champion_notes_for_patch(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let mut patch_notes_label = format!("Patch {} Notes", version);
+    let document = Html::parse_document(&patch_html);
+    let card_selector = Selector::parse("div.patch-change-block").unwrap();
+    let champion_name_selector = Selector::parse("h3.change-title a").unwrap();
+    let summary_selector = Selector::parse("p.summary").unwrap();
+    let context_selector = Selector::parse("blockquote.blockquote.context").unwrap();
+    let h4_or_ul_selector = Selector::parse("h4.change-detail-title, ul").unwrap();
+    let li_selector = Selector::parse("li").unwrap();
 
-    if vec!["de-de", "pt-br"].contains(&selected_language.lang.as_str()) {
-        selected_language.patch_notes = format!(
-            "{} {}",
-            identify_language(&selected_language.lang).patch_notes,
-            version
-        );
-        patch_notes_label = selected_language.patch_notes.clone();
-    }
+    let mut collected_abilities = Vec::new();
+    let mut summaries = Vec::new();
+    let mut contexts = Vec::new();
 
-    info!("Patch notes label: {}", patch_notes_label);
+    for card in document.select(&card_selector) {
+        let this_champion = card
+            .select(&champion_name_selector)
+            .next()
+            .map(|e| e.text().collect::<String>())
+            .unwrap_or_default();
 
-    let links: Vec<String> = {
-        let document = Html::parse_document(&response);
-        let selector = Selector::parse(&format!(r#"a[aria-label*="{}"]"#, patch_notes_label))
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if clean_champion_name(&this_champion).lower != clean_champion_name(desired_character).lower
+        {
+            continue;
+        }
 
-        info!(
-            "Selector: {}",
-            format!(r#"a[aria-label*="{}"]"#, patch_notes_label)
-        );
-
-        document
-            .select(&selector)
-            .filter_map(|el| {
-                el.value()
-                    .attr("href")
-                    .map(|href| format!("{}{}", BASE_URL, href))
-            })
-            .collect()
-    };
-
-    info!("Links: {}", links.len());
-
-    for full_url in links {
-        let patch_html = client
-            .get(&full_url)
-            .send()
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .text()
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-        let document = Html::parse_document(&patch_html);
-        let card_selector = Selector::parse("div.patch-change-block").unwrap();
-        let champion_name_selector = Selector::parse("h3.change-title a").unwrap();
-        let summary_selector = Selector::parse("p.summary").unwrap();
-        let context_selector = Selector::parse("blockquote.blockquote.context").unwrap();
-        let h4_or_ul_selector = Selector::parse("h4.change-detail-title, ul").unwrap();
-        let li_selector = Selector::parse("li").unwrap();
-
-        let mut collected_abilities = Vec::new();
-        let mut summaries = Vec::new();
-        let mut contexts = Vec::new();
-        let mut image_url = String::new();
-        let mut champion_name = String::new();
-
-        for card in document.select(&card_selector) {
-            let this_champion = card
-                .select(&champion_name_selector)
-                .next()
-                .map(|e| e.text().collect::<String>())
-                .unwrap_or_default();
-
-            if clean_champion_name(&this_champion).lower
-                != clean_champion_name(desired_character).lower
-            {
-                continue;
+        if let Some(summary_elem) = card.select(&summary_selector).next() {
+            let summary = summary_elem.text().collect::<String>();
+            if !summary.is_empty() {
+                summaries.push(summary);
             }
+        }
 
-            champion_name = this_champion.clone();
+        if let Some(context_elem) = card.select(&context_selector).next() {
+            let context = clean_text(&context_elem.text().collect::<String>());
+            if !context.is_empty() {
+                contexts.push(context);
+            }
+        }
 
-            if let Some(summary_elem) = card.select(&summary_selector).next() {
-                let summary = summary_elem.text().collect::<String>();
-                if !summary.is_empty() {
-                    summaries.push(summary);
+        let mut current_ability = selected_language.base_stats.clone();
+        let mut temp_changes = Vec::new();
+
+        for element in card.select(&h4_or_ul_selector) {
+            if element.value().name() == "h4" {
+                if !temp_changes.is_empty() {
+                    collected_abilities.push(AbilityChange {
+                        name: current_ability.clone(),
+                        changes: temp_changes.clone(),
+                    });
+                    info!("Ability changes collected for {}", current_ability);
+                    temp_changes.clear();
                 }
+                current_ability = element.text().collect::<String>().trim().to_string();
+            } else if element.value().name() == "ul" {
+                let changes = element
+                    .select(&li_selector)
+                    .map(|li| li.text().collect::<String>().trim().to_string())
+                    .collect::<Vec<_>>();
+                temp_changes.extend(changes);
             }
+        }
 
-            if let Some(context_elem) = card.select(&context_selector).next() {
-                let context = clean_text(&context_elem.text().collect::<String>());
-                if !context.is_empty() {
-                    contexts.push(context);
-                }
-            }
-
-            let mut current_ability = selected_language.base_stats.clone();
-            let mut temp_changes = Vec::new();
-
-            for element in card.select(&h4_or_ul_selector) {
-                if element.value().name() == "h4" {
-                    if !temp_changes.is_empty() {
-                        collected_abilities.push(AbilityChange {
-                            name: current_ability.clone(),
-                            changes: temp_changes.clone(),
-                        });
-                        temp_changes.clear();
-                    }
-                    current_ability = element.text().collect::<String>().trim().to_string();
-                } else if element.value().name() == "ul" {
-                    let changes = element
-                        .select(&li_selector)
-                        .map(|li| li.text().collect::<String>().trim().to_string())
-                        .collect::<Vec<_>>();
-                    temp_changes.extend(changes);
-                }
-            }
-
-            if !temp_changes.is_empty() {
-                collected_abilities.push(AbilityChange {
-                    name: current_ability.clone(),
-                    changes: temp_changes.clone(),
-                });
-            }
-
-            let mut champion_names = ChampionNames::default();
-            if image_url.is_empty() {
-                image_url =
-                    generate_champion_image_url(&clean_champion_name(&champion_name).lower).lower;
-                champion_names = generate_champion_image_url(&champion_name);
-            }
-
-            return Ok(PatchCard {
-                champion_name: this_champion,
-                champion_image: champion_names,
-                summary: summaries.join(" / "),
-                context: contexts.join(" / "),
-                abilities: collected_abilities,
-                patch_version: version.to_string(),
+        if !temp_changes.is_empty() {
+            collected_abilities.push(AbilityChange {
+                name: current_ability.clone(),
+                changes: temp_changes.clone(),
             });
         }
+
+        let champion_images = ChampionImages::default();
+
+        return Ok(PatchCard {
+            champion_name: this_champion,
+            champion_image: champion_images,
+            summary: summaries.join(" / "),
+            context: contexts.join(" / "),
+            abilities: collected_abilities,
+            patch_version: version.to_string(),
+        });
     }
 
     Ok(PatchCard::default())
@@ -288,22 +284,6 @@ pub async fn get_champion_notes_and_select_page(
     selected_language: &mut LanguageInfo,
     version: &str,
 ) -> Result<PatchCard, StatusCode> {
-    let url = format!(
-        "{}/{}/news/tags/patch-notes/",
-        BASE_URL, &selected_language.lang
-    );
-
-    info!("URL found: {}", url);
-
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .text()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
     if vec!["de-de", "pt-br"].contains(&selected_language.lang.as_str()) {
         selected_language.patch_notes = format!(
             "{} {}",
@@ -312,149 +292,119 @@ pub async fn get_champion_notes_and_select_page(
         );
     }
 
-    let patch_notes_label = selected_language.patch_notes.clone();
+    let links = vec![format!(
+        "https://www.leagueoflegends.com/{}/news/game-updates/patch-25-20-notes/",
+        selected_language.lang
+    )];
 
-    info!("Patch note label found");
+    let patch_html = client
+        .get(&links[0])
+        .send()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .text()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let links: Vec<String> = {
-        let document = Html::parse_document(&response);
-        let selector = Selector::parse(&format!(r#"a[aria-label*="{}"]"#, patch_notes_label))
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let document = Html::parse_document(&patch_html);
+    info!("Document found");
 
-        document
-            .select(&selector)
-            .filter_map(|el| {
-                el.value()
-                    .attr("href")
-                    .map(|href| format!("{}{}", BASE_URL, href))
-            })
-            .collect()
-    };
+    let card_selector = Selector::parse("div.patch-change-block").unwrap();
+    let champion_name_selector = Selector::parse("h3.change-title a").unwrap();
+    let summary_selector = Selector::parse("p.summary").unwrap();
+    let context_selector = Selector::parse("blockquote.blockquote.context").unwrap();
+    let h4_or_ul_selector = Selector::parse("h4.change-detail-title, ul").unwrap();
+    let li_selector = Selector::parse("li").unwrap();
 
-    for full_url in links {
-        let patch_html = client
-            .get(&full_url)
-            .send()
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .text()
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    info!("Selectors found");
 
-        let document = Html::parse_document(&patch_html);
-        info!("Document found");
+    let mut collected_abilities = vec![];
+    let mut summaries = vec![];
+    let mut contexts = vec![];
 
-        let card_selector = Selector::parse("div.patch-change-block").unwrap();
-        let champion_name_selector = Selector::parse("h3.change-title a").unwrap();
-        let summary_selector = Selector::parse("p.summary").unwrap();
-        let context_selector = Selector::parse("blockquote.blockquote.context").unwrap();
-        let h4_or_ul_selector = Selector::parse("h4.change-detail-title, ul").unwrap();
-        let li_selector = Selector::parse("li").unwrap();
+    for card in document.select(&card_selector) {
+        let this_champion = card
+            .select(&champion_name_selector)
+            .next()
+            .map(|e| e.text().collect::<String>())
+            .unwrap_or_default();
 
-        info!("Selectors found");
+        if clean_champion_name(&this_champion).lower != clean_champion_name(desired_character).lower
+        {
+            continue;
+        }
 
-        let mut collected_abilities = vec![];
-        let mut summaries = vec![];
-        let mut contexts = vec![];
-        let mut image_url = String::new();
-        let mut champion_name = String::new();
+        let champion_name = this_champion;
 
-        for card in document.select(&card_selector) {
-            let this_champion = card
-                .select(&champion_name_selector)
-                .next()
-                .map(|e| e.text().collect::<String>())
-                .unwrap_or_default();
+        info!("Champion: {}", champion_name);
 
-            if clean_champion_name(&this_champion).lower
-                != clean_champion_name(desired_character).lower
-            {
-                continue;
+        if let Some(summary_elem) = card.select(&summary_selector).next() {
+            let summary = summary_elem.text().collect::<String>();
+            if !summary.is_empty() {
+                summaries.push(summary);
             }
+        }
 
-            champion_name = this_champion;
+        if let Some(context_elem) = card.select(&context_selector).next() {
+            let context = clean_text(&context_elem.text().collect::<String>());
+            if !context.is_empty() {
+                contexts.push(context);
+            }
+        }
 
-            info!("Champion: {}", champion_name);
+        let mut current_ability = selected_language.base_stats.clone();
+        let mut temp_changes = vec![];
 
-            if let Some(summary_elem) = card.select(&summary_selector).next() {
-                let summary = summary_elem.text().collect::<String>();
-                if !summary.is_empty() {
-                    summaries.push(summary);
+        for element in card.select(&h4_or_ul_selector) {
+            if element.value().name() == "h4" {
+                if !temp_changes.is_empty() {
+                    collected_abilities.push(AbilityChange {
+                        name: current_ability.clone(),
+                        changes: temp_changes.clone(),
+                    });
+                    temp_changes.clear();
                 }
+                current_ability = element.text().collect::<String>().trim().to_string();
+            } else if element.value().name() == "ul" {
+                let changes = element
+                    .select(&li_selector)
+                    .map(|li| li.text().collect::<String>().trim().to_string())
+                    .collect::<Vec<_>>();
+                temp_changes.extend(changes);
             }
+        }
 
-            if let Some(context_elem) = card.select(&context_selector).next() {
-                let context = clean_text(&context_elem.text().collect::<String>());
-                if !context.is_empty() {
-                    contexts.push(context);
-                }
-            }
-
-            let mut current_ability = selected_language.base_stats.clone();
-            let mut temp_changes = vec![];
-
-            for element in card.select(&h4_or_ul_selector) {
-                if element.value().name() == "h4" {
-                    if !temp_changes.is_empty() {
-                        collected_abilities.push(AbilityChange {
-                            name: current_ability.clone(),
-                            changes: temp_changes.clone(),
-                        });
-                        temp_changes.clear();
-                    }
-                    current_ability = element.text().collect::<String>().trim().to_string();
-                } else if element.value().name() == "ul" {
-                    let changes = element
-                        .select(&li_selector)
-                        .map(|li| li.text().collect::<String>().trim().to_string())
-                        .collect::<Vec<_>>();
-                    temp_changes.extend(changes);
-                }
-            }
-
-            if !temp_changes.is_empty() {
-                collected_abilities.push(AbilityChange {
-                    name: current_ability.clone(),
-                    changes: temp_changes.clone(),
-                });
-            }
-
-            let mut champion_names = ChampionNames::default();
-            if image_url.is_empty() {
-                image_url =
-                    generate_champion_image_url(&clean_champion_name(&champion_name).lower).lower;
-                champion_names = generate_champion_image_url(&champion_name);
-            }
-            if image_url.is_empty() {
-                image_url = format!(
-                    "https://am-a.akamaihd.net/image?f=https://ddragon.leagueoflegends.com/cdn/15.17.1/img/champion/{}.png",
-                    clean_champion_name(&champion_name).lower
-                );
-            }
-
-            return Ok(PatchCard {
-                champion_name,
-                champion_image: champion_names,
-                summary: summaries.join(" / "),
-                context: contexts.join(" / "),
-                abilities: collected_abilities,
-                patch_version: selected_language.patch_notes.clone(),
+        if !temp_changes.is_empty() {
+            collected_abilities.push(AbilityChange {
+                name: current_ability.clone(),
+                changes: temp_changes.clone(),
             });
         }
+
+        let champion_names = ChampionImages::default();
+
+        return Ok(PatchCard {
+            champion_name: champion_name,
+            champion_image: champion_names,
+            summary: summaries.join(" / "),
+            context: contexts.join(" / "),
+            abilities: collected_abilities,
+            patch_version: selected_language.patch_notes.clone(),
+        });
     }
 
     Err(StatusCode::NOT_FOUND)
 }
 
+// REFACTOR TO GET A SINGLE CHAMPION
 pub async fn get_champion_by_name(
     client: &Client,
     champion_name: &str,
-) -> Result<Option<Champion>, Box<dyn std::error::Error>> {
-    let champions = get_all_champions(client).await?;
-
-    let champion = champions
-        .into_iter()
-        .find(|c| c.name.trim().to_lowercase() == champion_name.trim().to_lowercase());
+) -> Result<Champion, StatusCode> {
+    let champion = match get_single_champion(client, champion_name).await {
+        Ok(champion) => champion,
+        Err(err) => return Err(err),
+    };
 
     Ok(champion)
 }

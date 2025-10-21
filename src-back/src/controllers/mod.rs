@@ -21,20 +21,21 @@ pub struct NameInput {
     name: String,
 }
 
+// REVISED
 pub async fn list_champions() -> Result<Json<Vec<Champion>>, StatusCode> {
     let client = Client::new();
-    let champions = champions::get_all_champions(&client).await.expect("erro");
+    let champions = champions::get_all_champions(&client)
+        .await
+        .expect("Error fetching champions");
     Ok(Json(champions))
 }
 
-pub async fn champion_info(
-    Query(name): Query<NameInput>,
-) -> Result<Json<Option<Champion>>, StatusCode> {
+pub async fn champion_info(Query(name): Query<NameInput>) -> Result<Json<Champion>, StatusCode> {
     let client = Client::new();
 
     let champion = champions::get_champion_by_name(&client, &name.name)
         .await
-        .expect("erro");
+        .expect("Error fetching champion by name");
     Ok(Json(champion))
 }
 
@@ -52,6 +53,10 @@ pub async fn champion_notes(
         notes[0].champion_image = generate_champion_image_url(&request.champion_name);
         Ok(Json(notes))
     } else {
+        info!(
+            "No patch notes found for champion: {}",
+            request.champion_name
+        );
         Err(StatusCode::INTERNAL_SERVER_ERROR)
     }
 }
