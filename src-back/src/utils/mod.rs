@@ -1,21 +1,14 @@
-use crate::PatchNote;
 use chrono::{NaiveDate, Utc};
-use tracing::error;
+use serde::{Deserialize, Serialize};
+use tracing::{error, info};
 
-#[derive(Debug)]
+use crate::champions::PatchNote;
+
+#[derive(Debug, Clone)]
 pub struct LanguageInfo {
     pub lang: String,
     pub base_stats: String,
     pub patch_notes: String,
-}
-
-pub fn select_language() -> LanguageInfo {
-    use std::io::stdin;
-    let mut option = String::new();
-    stdin()
-        .read_line(&mut option)
-        .map_err(|e| error!("Error reading language option"));
-    identify_language(&option)
 }
 
 pub fn identify_language(option: &str) -> LanguageInfo {
@@ -76,19 +69,39 @@ pub fn find_closest_patch(patches: &[PatchNote]) -> Option<&PatchNote> {
         .map(|(patch, _)| patch)
 }
 
-pub fn clean_champion_name(name: &str) -> String {
-    let mut result = String::new();
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct ChampionNames {
+    pub upper: String,
+    pub lower: String,
+}
+
+fn iter_champion_name(name: &str, to_upper: bool) -> String {
     let mut lowercase_next = false;
+    let mut result = String::new();
+
+    match name {
+        "Wukong" => return "MonkeyKing".to_string(),
+        "LeBlanc" => return "Leblanc".to_string(),
+        "Nunu & Willump" => return "Nunu".to_string(),
+        "Renata Glasc" => return "Renata".to_string(),
+        _ => {}
+    }
 
     for c in name.chars() {
-        if c.is_alphanumeric() {
+        if c.is_alphabetic() {
             if lowercase_next {
-                result.push(c.to_ascii_lowercase());
+                info!("Lowercase: {}", c);
+                if to_upper {
+                    result.push(c.to_ascii_uppercase());
+                } else {
+                    result.push(c.to_ascii_lowercase());
+                }
                 lowercase_next = false;
             } else {
                 result.push(c);
             }
         } else {
+            info!("Lowercase next");
             lowercase_next = true;
         }
     }
@@ -96,11 +109,11 @@ pub fn clean_champion_name(name: &str) -> String {
     result
 }
 
-pub fn read_character_name() -> String {
-    use std::io::stdin;
-    let mut name = String::new();
-    stdin()
-        .read_line(&mut name)
-        .map_err(|e| error!("Error reading character name"));
-    name
+pub fn clean_champion_name(name: &str) -> ChampionNames {
+    info!("Champion: {}", name);
+
+    ChampionNames {
+        upper: iter_champion_name(&name, true),
+        lower: iter_champion_name(&name, false),
+    }
 }
